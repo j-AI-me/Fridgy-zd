@@ -1,43 +1,51 @@
-import { createClient } from "@supabase/supabase-js"
+import { createClient as createSupabaseClient } from "@supabase/supabase-js"
 import type { Database } from "@/types/supabase"
 
-// Función para crear un cliente de Supabase con el rol de servicio
-export function createServerSupabaseClient() {
+// Re-exportar createClient desde @supabase/supabase-js
+export { createClient } from "@supabase/supabase-js"
+
+// Crear un cliente de Supabase para el lado del servidor
+export const createServerSupabaseClient = () => {
+  console.log("🔌 Creando cliente de Supabase para el servidor")
+
   const supabaseUrl = process.env.SUPABASE_URL
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
   if (!supabaseUrl || !supabaseKey) {
+    console.error("❌ Variables de entorno de Supabase no disponibles:", {
+      url: supabaseUrl ? "Disponible" : "No disponible",
+      key: supabaseKey ? "Disponible" : "No disponible",
+    })
     throw new Error("Variables de entorno de Supabase no configuradas")
   }
 
-  return createClient<Database>(supabaseUrl, supabaseKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-    // Configurar explícitamente para usar el rol de servicio
-    global: {
-      headers: {
-        "x-supabase-role": "service_role",
-      },
-    },
-  })
+  console.log("✅ Variables de entorno de Supabase disponibles")
+  return createSupabaseClient<Database>(supabaseUrl, supabaseKey)
 }
 
-// Cliente para uso en el lado del cliente
-let supabaseClient: ReturnType<typeof createClient> | null = null
+// Crear un cliente de Supabase para el lado del cliente
+let clientSupabaseClient: ReturnType<typeof createSupabaseClient<Database>> | null = null
 
-export function getSupabaseClient() {
+export const createClientSupabaseClient = () => {
+  console.log("🔌 Creando cliente de Supabase para el cliente")
+
+  if (clientSupabaseClient) {
+    console.log("♻️ Reutilizando cliente de Supabase existente")
+    return clientSupabaseClient
+  }
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error("Variables de entorno de Supabase no configuradas")
+  if (!supabaseUrl || !supabaseKey) {
+    console.error("❌ Variables de entorno públicas de Supabase no disponibles:", {
+      url: supabaseUrl ? "Disponible" : "No disponible",
+      key: supabaseKey ? "Disponible" : "No disponible",
+    })
+    throw new Error("Variables de entorno públicas de Supabase no configuradas")
   }
 
-  if (!supabaseClient) {
-    supabaseClient = createClient(supabaseUrl, supabaseAnonKey)
-  }
-
-  return supabaseClient
+  console.log("✅ Variables de entorno públicas de Supabase disponibles")
+  clientSupabaseClient = createSupabaseClient<Database>(supabaseUrl, supabaseKey)
+  return clientSupabaseClient
 }

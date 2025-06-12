@@ -5,61 +5,82 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { Header } from "@/components/header"
 import { IngredientsList } from "@/components/ingredients-list"
 import { RecipeList } from "@/components/recipe-list"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { AlertTriangle } from "lucide-react"
-import { secureRetrieve } from "@/lib/secure-storage" // Importar secureRetrieve
+import { useToast } from "@/components/ui/use-toast"
+import { secureRetrieve } from "@/lib/secure-storage"
+import { enrichRecipesWithCompatibility } from "@/lib/recipe-filter"
 
 export default function ResultsPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { toast } = useToast()
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<any>(null)
-  const [isExample, setIsExample] = useState(false)
-  const [message, setMessage] = useState("")
 
   useEffect(() => {
-    const analysisId = searchParams.get("id")
+    const id = searchParams.get("id")
 
-    if (!analysisId) {
-      console.log("❌ No hay ID de análisis, redirigiendo...")
-      router.push("/app")
+    if (!id) {
+      console.error("No se proporcionó ID en los parámetros de búsqueda")
+      toast({
+        title: "Error",
+        description: "No se pudo cargar los resultados. Volviendo a la página principal.",
+        variant: "destructive",
+      })
+      router.push("/")
       return
     }
 
-    console.log("🔍 Cargando análisis:", analysisId)
+    console.log("🔍 Obteniendo resultados para ID:", id)
 
-    // Cargar datos usando la función secureRetrieve
-    try {
-      const storedData = secureRetrieve(`analysis_${analysisId}`)
+    // Intentar obtener los datos de almacenamiento seguro
+    const loadData = async () => {
+      try {
+        const storedData = secureRetrieve(`data_${id}`)
 
-      if (storedData) {
-        console.log("✅ Datos cargados:", {
-          hasData: !!storedData.data,
-          isExample: storedData.isExample,
-          message: storedData.message,
+        if (storedData) {
+          console.log("✅ Datos encontrados en almacenamiento seguro")
+
+          // Enriquecer las recetas con información de compatibilidad
+          if (storedData.recetas && storedData.recetas.length > 0) {
+            const enrichedRecipes = await enrichRecipesWithCompatibility(storedData.recetas)
+
+            // Actualizar los datos con las recetas enriquecidas
+            setData({
+              ...storedData,
+              recetas: enrichedRecipes,
+            })
+          } else {
+            setData(storedData)
+          }
+
+          setLoading(false)
+        } else {
+          console.error("❌ No se encontraron datos en almacenamiento seguro")
+          toast({
+            title: "Error",
+            description: "No se encontraron resultados. Volviendo a la página principal.",
+            variant: "destructive",
+          })
+          setTimeout(() => router.push("/"), 2000)
+        }
+      } catch (error) {
+        console.error("❌ Error al obtener datos:", error)
+        toast({
+          title: "Error",
+          description: "Ocurrió un error al cargar los resultados. Volviendo a la página principal.",
+          variant: "destructive",
         })
-
-        setData(storedData.data) // Los datos de la receta están en storedData.data
-        setIsExample(storedData.isExample || false)
-        setMessage(storedData.message || "")
-      } else {
-        console.log("❌ No se encontraron datos para:", analysisId)
-        router.push("/app")
-        return
+        setTimeout(() => router.push("/"), 2000)
       }
-    } catch (error) {
-      console.error("❌ Error cargando datos:", error)
-      router.push("/app")
-      return
     }
 
-    setLoading(false)
-  }, [searchParams, router])
+    loadData()
+  }, [searchParams, router, toast])
 
   if (loading) {
     return (
       <>
-        <Header title="Cargando..." showBackButton backUrl="/app" />
+        <Header title="Cargando..." showBackButton backUrl="/" />
         <div className="flex-1 flex items-center justify-center p-4">
           <div className="text-center">
             <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
@@ -73,7 +94,7 @@ export default function ResultsPage() {
   if (!data) {
     return (
       <>
-        <Header title="Error" showBackButton backUrl="/app" />
+        <Header title="Error" showBackButton backUrl="/" />
         <div className="flex-1 flex items-center justify-center p-4">
           <div className="text-center">
             <p className="text-lg font-semibold text-destructive mb-2">No se encontraron resultados</p>
@@ -84,29 +105,20 @@ export default function ResultsPage() {
     )
   }
 
+  const { ingredientes, recetas } = data
+
   return (
     <>
-      <Header title="Resultados" showBackButton backUrl="/app" />
+      <Header title="Resultados" showBackButton backUrl="/" />
       <div className="flex-1 p-4">
-        {/* Aviso si son datos de ejemplo */}
-        {isExample && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertTitle>⚠️ Datos de Ejemplo</AlertTitle>
-            <AlertDescription>
-              {message} Las recetas mostradas son ejemplos, no están basadas en tu imagen real.
-            </AlertDescription>
-          </Alert>
-        )}
-
         <section className="mb-6">
           <h2 className="text-xl font-semibold mb-3">Ingredientes encontrados</h2>
-          <IngredientsList ingredients={data.ingredientes || []} />
+          <IngredientsList ingredients={ingredientes} />
         </section>
 
         <section>
           <h2 className="text-xl font-semibold mb-3">Recetas sugeridas</h2>
-          <RecipeList recipes={data.recetas || []} fridgeId={searchParams.get("id") || ""} />
+          <RecipeList recipes={recetas} fridgeId={searchParams.get("id") || ""} />
         </section>
       </div>
     </>

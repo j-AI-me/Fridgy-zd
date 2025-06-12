@@ -1,19 +1,20 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { CameraComponent } from "@/components/camera" // Importar CameraComponent
+import { Camera } from "@/components/camera"
 import { IngredientsList } from "@/components/ingredients-list"
 import { RecipeList } from "@/components/recipe-list"
 import { RecipeDetail } from "@/components/recipe-detail"
 import { HistoryList } from "@/components/history-list"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
-import { Home, History, Heart, ArrowLeft, Loader2, AlertCircle } from "lucide-react"
+import { Home, History, Heart, ArrowLeft, Loader2 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
-import { useUser } from "@clerk/nextjs"
+import { UserMenu } from "@/components/user-menu"
+import { NotificationsBell } from "@/components/notifications-bell"
+import { useUser, SignedIn, SignedOut } from "@clerk/nextjs"
 import { canPerformAnalysis } from "@/lib/guest-mode"
-import { Header } from "@/components/header"
 
 // Datos de ejemplo para usar cuando no hay autenticación
 const EXAMPLE_DATA = {
@@ -125,6 +126,9 @@ export default function AppPage() {
 
   // Verificar si el usuario puede realizar análisis
   useEffect(() => {
+    // Si el usuario no está autenticado, el middleware ya lo redirigirá.
+    // Esta lógica de `canPerformAnalysis` solo es relevante si permitimos un modo invitado limitado.
+    // Si /app está completamente protegida, esta parte podría simplificarse aún más.
     if (!isSignedIn) {
       const canPerform = canPerformAnalysis()
       setCanAnalyze(canPerform)
@@ -152,10 +156,9 @@ export default function AppPage() {
     }, 1000)
   }, [searchParams])
 
-  // Función para manejar el análisis exitoso (ya no se usa directamente por CameraComponent)
-  // Se mantiene por si otras partes del código la necesitan o para futuras expansiones
+  // Función para manejar el análisis exitoso
   const handleAnalysisSuccess = (result: AnalysisResult) => {
-    console.log("✅ Análisis exitoso (desde AppPage):", result)
+    console.log("✅ Análisis exitoso:", result)
     setAnalysisResult(result)
     setCurrentView("results")
     setActiveTab("home")
@@ -242,24 +245,19 @@ export default function AppPage() {
 
             <div className="transition-all duration-200">
               <TabsContent value="home" className="flex-1 flex flex-col items-center justify-center p-4 text-center">
+                {/* GuestModeBanner y canAnalyze ya no son estrictamente necesarios aquí si /app está protegida */}
+                {/* <SignedOut>
+                  <GuestModeBanner />
+                </SignedOut> */}
+
                 <div className="transition-all duration-200">
                   <h1 className="text-2xl font-bold mb-2">¿Qué hay en tu nevera?</h1>
                   <p className="text-muted-foreground mb-8">
                     Toma una foto del contenido de tu nevera y te sugeriremos recetas deliciosas
                   </p>
 
-                  {canAnalyze ? (
-                    <CameraComponent /> // Usar CameraComponent directamente
-                  ) : (
-                    <div className="border-2 border-dashed border-border rounded-lg p-12 flex flex-col items-center justify-center bg-card shadow-sm">
-                      <AlertCircle className="h-12 w-12 text-destructive mb-4" />
-                      <h3 className="text-lg font-semibold mb-2">Límite alcanzado</h3>
-                      <p className="text-sm text-muted-foreground mb-4">
-                        Has alcanzado el límite de análisis gratuitos. Regístrate para continuar.
-                      </p>
-                      <Button onClick={() => router.push("/sign-in")}>Iniciar sesión</Button>
-                    </div>
-                  )}
+                  {/* canAnalyze ya no es necesario si la ruta está protegida */}
+                  <Camera onAnalysisSuccess={handleAnalysisSuccess} />
                 </div>
               </TabsContent>
 
@@ -356,12 +354,54 @@ export default function AppPage() {
     }
   }
 
+  // Determinar el título y si mostrar el botón de retroceso
+  const getHeaderProps = () => {
+    switch (currentView) {
+      case "home":
+        return { title: "Fridgy", showBackButton: false }
+      case "results":
+        return { title: "Resultados", showBackButton: true }
+      case "recipe":
+        return { title: "Receta", showBackButton: true }
+      default:
+        return { title: "Fridgy", showBackButton: false }
+    }
+  }
+
+  const { title, showBackButton } = getHeaderProps()
+
   return (
     <div className="flex flex-col min-h-[100dvh] bg-gradient-to-b from-background to-muted/50">
-      <Header title="Fridgy" />
-      <main className="flex-1 p-4">
-        <div className="max-w-2xl mx-auto">{renderView()}</div>
-      </main>
+      <header className="sticky top-0 z-10 bg-background border-b border-border h-14 flex items-center px-4 justify-between shadow-sm">
+        <div className="flex items-center">
+          {showBackButton && (
+            <button onClick={handleBack} className="mr-2 p-2 rounded-full hover:bg-muted transition-colors">
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+          )}
+          <h1 className="text-xl font-semibold">{title}</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <SignedIn>
+            <NotificationsBell />
+            <UserMenu />
+          </SignedIn>
+          <SignedOut>
+            {/* Este botón solo se mostrará si el middleware no redirige antes,
+                pero es una buena práctica tenerlo para rutas públicas o como fallback. */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push("/sign-in")}
+              className="flex items-center gap-1"
+            >
+              Iniciar sesión
+            </Button>
+          </SignedOut>
+        </div>
+      </header>
+
+      <div className="flex-1 transition-all duration-200">{renderView()}</div>
     </div>
   )
 }
