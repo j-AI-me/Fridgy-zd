@@ -8,12 +8,10 @@ import { getUserMetadata } from "@/lib/user-profile"
 import { createNotification } from "@/lib/notifications"
 import { auth } from "@clerk/nextjs/server"
 import { registerAnalysis } from "@/lib/guest-mode"
-import { createServerSupabaseClient } from "@/lib/supabase"
+import { createClient } from "@supabase/supabase-js"
 import { secureStore } from "@/lib/secure-storage"
-import { saveAnalysis } from "@/lib/actions"
 
 // Almacenamiento temporal en memoria para desarrollo
-// Nota: En producción, considera usar una base de datos real
 const tempStorage = new Map<string, any>()
 
 export async function analyzeImage(formData: FormData) {
@@ -31,7 +29,6 @@ export async function analyzeImage(formData: FormData) {
 
     // Si no está autenticado, verificar si puede realizar análisis
     if (!isAuthenticated) {
-      // Registrar el análisis y verificar si se pudo realizar
       const analysisId = crypto.randomUUID()
       const canAnalyze = registerAnalysis(analysisId)
 
@@ -88,7 +85,7 @@ export async function analyzeImage(formData: FormData) {
     customPrompt +=
       ' IMPORTANTE: Responde ÚNICAMENTE con un objeto JSON válido con la siguiente estructura exacta, sin texto adicional antes o después: { "ingredientes": ["ingrediente1", "ingrediente2", ...], "recetas": [{ "titulo": "Título de la receta", "descripcion": "Breve descripción", "ingredientes": { "disponibles": ["ingrediente1", ...], "adicionales": ["ingrediente3", ...] }, "preparacion": ["paso1", "paso2", ...], "calorias": 350 }, ...] }'
 
-    // Use OpenAI to analyze the image with a more explicit prompt for JSON formatting
+    // Use OpenAI to analyze the image
     console.log("🔍 Iniciando análisis de imagen con OpenAI...")
 
     try {
@@ -121,7 +118,6 @@ export async function analyzeImage(formData: FormData) {
       // Attempt to parse the JSON response
       let data
       try {
-        // Trim any potential text before or after the JSON
         const jsonMatch = text.match(/\{[\s\S]*\}/)
         const jsonString = jsonMatch ? jsonMatch[0] : text
         data = JSON.parse(jsonString)
@@ -141,31 +137,14 @@ export async function analyzeImage(formData: FormData) {
         console.log("✅ JSON parseado correctamente")
 
         // Guardar en Supabase si el usuario está autenticado
-        if (isAuthenticated) {
-          // Guardar la imagen en Supabase Storage
-          const supabase = createServerSupabaseClient()
-          const imageData = dataURI.split(",")[1]
-          const { data: uploadResult } = await supabase.storage
-            .from("analysis-images")
-            .upload(`analysis_${id}.jpg`, Buffer.from(imageData, "base64"), {
-              contentType: "image/jpeg",
-            })
-
-          // Obtener la URL pública de la imagen
-          const { data: publicUrlData } = supabase.storage
-            .from("analysis-images")
-            .getPublicUrl(uploadResult?.path || `analysis_${id}.jpg`)
-
-          // Añadir la URL de la imagen a los datos
-          data.image_url = publicUrlData?.publicUrl
-
-          // Guardar el análisis en la base de datos
-          const saveResult = await saveAnalysis({
-            ...data,
-            id,
-          })
-
-          console.log("💾 Resultado de guardar análisis:", saveResult)
+        if (isAuthenticated && userId) {
+          console.log("💾 Guardando análisis en Supabase...")
+          try {
+            await saveAnalysisToSupabase(userId, data, dataURI, id)
+            console.log("✅ Análisis guardado en Supabase correctamente")
+          } catch (error) {
+            console.error("❌ Error al guardar en Supabase:", error)
+          }
         }
 
         // Store the data in our temporary storage
@@ -249,6 +228,143 @@ export async function analyzeImage(formData: FormData) {
   }
 }
 
+// Función para guardar el análisis en Supabase
+async function saveAnalysisToSupabase(clerkUserId: string, data: any, imageDataURI: string, analysisId: string) {
+  try {
+    console.log("💾 Iniciando guardado en Supabase para usuario:", clerkUserId)
+
+    // Crear cliente de Supabase
+    const supabaseUrl = process.env.SUPABASE_URL
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error("Variables de entorno de Supabase no configuradas")
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseKey)
+
+    // Primero, verificar o crear el perfil del usuario
+    let { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("clerk_id", clerkUserId)
+      .single()
+
+    if (profileError && profileError.code === "PGRST116") {
+      // El perfil no existe, crearlo
+      console.log("📝 Creando perfil para usuario:", clerkUserId)
+      const { data: newProfile, error: createError } = await supabase
+        .from("profiles")
+        .insert({
+          clerk_id: clerkUserId,
+          email: `user_${clerkUserId}@example.com`,
+          full_name: `Usuario ${clerkUserId.slice(-4)}`,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .select("id")
+        .single()
+
+      if (createError) {
+        console.error("❌ Error al crear perfil:", createError)
+        throw createError
+      }
+
+      profile = newProfile
+      console.log("✅ Perfil creado:", profile.id)
+    } else if (profileError) {
+      console.error("❌ Error al obtener perfil:", profileError)
+      throw profileError
+    }
+
+    console.log("✅ Perfil obtenido:", profile.id)
+
+    // Guardar la imagen en Supabase Storage (opcional)
+    let imageUrl = null
+    try {
+      const imageData = imageDataURI.split(",")[1] // Eliminar el prefijo "data:image/jpeg;base64,"
+      const imageName = `analysis_${analysisId}.jpg`
+
+      const { data: uploadData, error: imageError } = await supabase.storage
+        .from("analysis-images")
+        .upload(imageName, Buffer.from(imageData, "base64"), {
+          contentType: "image/jpeg",
+        })
+
+      if (!imageError) {
+        const { data: urlData } = supabase.storage.from("analysis-images").getPublicUrl(imageName)
+        imageUrl = urlData.publicUrl
+        console.log("✅ Imagen guardada:", imageUrl)
+      } else {
+        console.log("⚠️ No se pudo guardar la imagen:", imageError.message)
+      }
+    } catch (imageError) {
+      console.log("⚠️ Error al guardar imagen, continuando sin imagen:", imageError)
+    }
+
+    // Guardar el análisis en la base de datos
+    console.log("💾 Guardando análisis en la tabla analyses...")
+    const { data: analysis, error: analysisError } = await supabase
+      .from("analyses")
+      .insert({
+        id: analysisId,
+        user_id: profile.id,
+        image_url: imageUrl,
+        ingredients: data.ingredientes || [],
+        created_at: new Date().toISOString(),
+      })
+      .select()
+      .single()
+
+    if (analysisError) {
+      console.error("❌ Error al guardar análisis:", analysisError)
+      throw analysisError
+    }
+
+    console.log("✅ Análisis guardado:", analysis.id)
+
+    // Guardar las recetas en la base de datos
+    if (data.recetas && Array.isArray(data.recetas)) {
+      console.log("💾 Guardando", data.recetas.length, "recetas...")
+
+      for (let i = 0; i < data.recetas.length; i++) {
+        const receta = data.recetas[i]
+        try {
+          const { data: recipe, error: recipeError } = await supabase
+            .from("recipes")
+            .insert({
+              id: crypto.randomUUID(),
+              analysis_id: analysisId,
+              title: receta.titulo || `Receta ${i + 1}`,
+              description: receta.descripcion || "",
+              available_ingredients: receta.ingredientes?.disponibles || [],
+              additional_ingredients: receta.ingredientes?.adicionales || [],
+              preparation_steps: receta.preparacion || [],
+              calories: receta.calorias || 0,
+              created_at: new Date().toISOString(),
+            })
+            .select()
+            .single()
+
+          if (recipeError) {
+            console.error(`❌ Error al guardar receta ${i + 1}:`, recipeError)
+          } else {
+            console.log(`✅ Receta ${i + 1} guardada:`, recipe.id)
+          }
+        } catch (error) {
+          console.error(`❌ Error al procesar receta ${i + 1}:`, error)
+        }
+      }
+    }
+
+    console.log("✅ Análisis completo guardado en Supabase")
+    return true
+  } catch (error) {
+    console.error("❌ Error completo al guardar en Supabase:", error)
+    throw error
+  }
+}
+
 export async function getAnalysisResults(id: string) {
   try {
     console.log("🔍 Buscando resultados para ID:", id)
@@ -273,52 +389,5 @@ export async function getAnalysisResults(id: string) {
       success: false,
       error: error instanceof Error ? error.message : "Error desconocido",
     }
-  }
-}
-
-// Función para obtener los análisis del usuario desde Supabase
-export async function getUserAnalyses() {
-  try {
-    console.log("🔍 Obteniendo análisis del usuario...")
-
-    const { userId } = auth()
-
-    if (!userId) {
-      console.error("❌ Usuario no autenticado")
-      return { success: false, error: "Usuario no autenticado" }
-    }
-
-    // Crear cliente de Supabase
-    const supabase = createServerSupabaseClient()
-
-    // Obtener el ID del perfil del usuario
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("clerk_id", userId)
-      .single()
-
-    if (profileError) {
-      console.error("❌ Error al obtener perfil:", profileError)
-      throw profileError
-    }
-
-    // Obtener los análisis del usuario
-    const { data: analyses, error: analysesError } = await supabase
-      .from("analyses")
-      .select("*, recipes(*)")
-      .eq("user_id", profile.id)
-      .order("created_at", { ascending: false })
-
-    if (analysesError) {
-      console.error("❌ Error al obtener análisis:", analysesError)
-      throw analysesError
-    }
-
-    console.log(`✅ Se encontraron ${analyses.length} análisis`)
-    return { success: true, analyses }
-  } catch (error) {
-    console.error("❌ Error al obtener análisis del usuario:", error)
-    return { success: false, error: error instanceof Error ? error.message : "Error desconocido" }
   }
 }

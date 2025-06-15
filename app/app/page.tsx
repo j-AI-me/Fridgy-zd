@@ -8,12 +8,13 @@ import { RecipeDetail } from "@/components/recipe-detail"
 import { HistoryList } from "@/components/history-list"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
-import { Home, History, Heart, ArrowLeft, Loader2 } from "lucide-react"
+import { Home, History, Heart, ArrowLeft, Loader2, AlertCircle } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
 import { UserMenu } from "@/components/user-menu"
 import { NotificationsBell } from "@/components/notifications-bell"
 import { useUser, SignedIn, SignedOut } from "@clerk/nextjs"
+import { GuestModeBanner } from "@/components/guest-mode-banner"
 import { canPerformAnalysis } from "@/lib/guest-mode"
 
 // Datos de ejemplo para usar cuando no hay autenticación
@@ -126,9 +127,6 @@ export default function AppPage() {
 
   // Verificar si el usuario puede realizar análisis
   useEffect(() => {
-    // Si el usuario no está autenticado, el middleware ya lo redirigirá.
-    // Esta lógica de `canPerformAnalysis` solo es relevante si permitimos un modo invitado limitado.
-    // Si /app está completamente protegida, esta parte podría simplificarse aún más.
     if (!isSignedIn) {
       const canPerform = canPerformAnalysis()
       setCanAnalyze(canPerform)
@@ -245,10 +243,9 @@ export default function AppPage() {
 
             <div className="transition-all duration-200">
               <TabsContent value="home" className="flex-1 flex flex-col items-center justify-center p-4 text-center">
-                {/* GuestModeBanner y canAnalyze ya no son estrictamente necesarios aquí si /app está protegida */}
-                {/* <SignedOut>
+                <SignedOut>
                   <GuestModeBanner />
-                </SignedOut> */}
+                </SignedOut>
 
                 <div className="transition-all duration-200">
                   <h1 className="text-2xl font-bold mb-2">¿Qué hay en tu nevera?</h1>
@@ -256,8 +253,18 @@ export default function AppPage() {
                     Toma una foto del contenido de tu nevera y te sugeriremos recetas deliciosas
                   </p>
 
-                  {/* canAnalyze ya no es necesario si la ruta está protegida */}
-                  <Camera onAnalysisSuccess={handleAnalysisSuccess} />
+                  {canAnalyze ? (
+                    <Camera onAnalysisSuccess={handleAnalysisSuccess} />
+                  ) : (
+                    <div className="border-2 border-dashed border-border rounded-lg p-12 flex flex-col items-center justify-center bg-card shadow-sm">
+                      <AlertCircle className="h-12 w-12 text-destructive mb-4" />
+                      <h3 className="text-lg font-semibold mb-2">Límite alcanzado</h3>
+                      <p className="text-sm text-muted-foreground mb-4">
+                        Has alcanzado el límite de análisis gratuitos. Regístrate para continuar.
+                      </p>
+                      <Button onClick={() => router.push("/sign-in")}>Iniciar sesión</Button>
+                    </div>
+                  )}
                 </div>
               </TabsContent>
 
@@ -387,8 +394,6 @@ export default function AppPage() {
             <UserMenu />
           </SignedIn>
           <SignedOut>
-            {/* Este botón solo se mostrará si el middleware no redirige antes,
-                pero es una buena práctica tenerlo para rutas públicas o como fallback. */}
             <Button
               variant="outline"
               size="sm"
